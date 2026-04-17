@@ -3,137 +3,117 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>ALS Event iPad Controller (BLE)</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <title>ALS Event iPad Controller (Wi-Fi AP Offline)</title>
   <style>
-    body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; }
-    #settings {
-      position: absolute; top: 10px; left: 10px; z-index: 999; /* 最前面に配置 */
-      background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
-      font-family: sans-serif; display: flex; align-items: center; gap: 10px;
+    body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; font-family: sans-serif; }
+    
+    /* カメラの映像を背景に全画面表示 */
+    #bgCamera {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: contain; 
+      z-index: -1;         
+      background-color: #111;
     }
-    /* iPad用にボタンを大きく、押しやすく調整 */
+
+    #settings {
+      position: absolute; top: 10px; left: 10px; z-index: 999;
+      background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
+      display: flex; flex-direction: column; gap: 15px;
+    }
+    .row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+
     button { 
-      padding: 12px 24px; border-radius: 8px; border: none; 
-      background: #007AFF; color: white; font-size: 18px; font-weight: bold;
+      padding: 8px 16px; border-radius: 8px; border: none; 
+      background: #007AFF; color: white; font-size: 14px; font-weight: bold;
       cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
     button:active { background: #005bb5; transform: scale(0.95); }
-    button:disabled { background: #ff4444; cursor: not-allowed; transform: none; }
-    #bleStatus { font-size: 16px; font-weight: bold; }
+    
+    input[type="text"] {
+      padding: 6px; font-size: 14px; border-radius: 4px; border: 1px solid #ccc; width: 110px;
+    }
+
+    /* 描画用キャンバス */
+    #uiCanvas {
+      position: absolute; top: 0; left: 0; z-index: 1; pointer-events: none;
+    }
   </style>
 </head>
 <body>
+
+  <!-- カメラの映像を表示するタグ -->
+  <img id="bgCamera" alt="ここにカメラの映像が映ります">
+
   <!-- 設定パネル -->
   <div id="settings">
-    <button id="bleBtn">Bluetoothで接続</button>
-    <span id="bleStatus">未接続</span>
+    <div class="row">
+      <span>マイコンIP(操作):</span>
+      <input type="text" id="m5Ip" value="192.168.4.1">
+    </div>
+    <div class="row">
+      <span>カメラIP(映像):</span>
+      <input type="text" id="camIp" value="192.168.4.2">
+      <button id="camBtn">映像を更新</button>
+    </div>
   </div>
 
-  <!-- カスタムメッセージボックス（alertの代わり） -->
-  <div id="msgBox" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(220,50,50,0.9); color:white; padding:20px; border-radius:10px; z-index:1000; text-align:center; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
-    <p id="msgText" style="margin-bottom: 15px; font-size: 16px; white-space: pre-wrap; line-height: 1.5;"></p>
-    <button onclick="document.getElementById('msgBox').style.display='none'" style="background:#333; font-size: 16px;">閉じる</button>
-  </div>
+  <!-- UI描画用キャンバス -->
+  <canvas id="uiCanvas"></canvas>
 
   <script>
-    // --- ブラウザのBluetooth対応チェック ---
-    document.addEventListener("DOMContentLoaded", () => {
-      const btn = document.getElementById('bleBtn');
-      if (!navigator.bluetooth) {
-        // Safariなど非対応ブラウザの場合、ボタンを赤くして警告
-        btn.innerText = "⚠️ Safari非対応 (Bluefyを使ってください)";
-        btn.disabled = true; 
-        document.getElementById('bleStatus').innerText = "通信不可";
-      } else {
-        // 対応している場合のみイベント登録
-        btn.addEventListener('click', connectBLE);
-      }
+    // --- 映像の表示処理 ---
+    document.getElementById('camBtn').addEventListener('click', () => {
+      const ip = document.getElementById('camIp').value;
+      if (!ip) return;
+      const bgImg = document.getElementById('bgCamera');
+      // M5CameraやESP32-CAMの標準的な映像配信ポート（:81/stream）
+      bgImg.src = `http://${ip}:81/stream`;
     });
-
-    // --- BLE関連 ---
-    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-    const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-    let bleCharacteristic = null;
-
-    async function connectBLE() {
-      try {
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'ALS_M5StickC' }],
-          optionalServices: [SERVICE_UUID]
-        });
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
-        
-        document.getElementById('bleStatus').innerText = "✅ 接続済み！";
-        document.getElementById('bleStatus').style.color = "#4CAF50";
-        document.getElementById('bleBtn').style.display = "none"; // 接続後はボタンを隠す
-        
-        device.addEventListener('gattserverdisconnected', () => {
-          document.getElementById('bleStatus').innerText = "❌ 切断されました";
-          document.getElementById('bleStatus').style.color = "#ff4444";
-          document.getElementById('bleBtn').style.display = "block";
-          bleCharacteristic = null;
-        });
-      } catch (error) {
-        console.error(error);
-        let errorMsg = "接続がキャンセルされたか、失敗しました。";
-        // プレビュー環境などでの権限エラーを検知
-        if (error.name === 'SecurityError') {
-           errorMsg = "セキュリティ設定によりBluetoothがブロックされました。\nこのプレビュー画面の中ではBluetoothを使用できません。\n\n右上のボタンから別タブで開くか、iPadのBluefyブラウザにURLをコピーして使用してください。";
-        }
-        document.getElementById('msgText').innerText = errorMsg;
-        document.getElementById('msgBox').style.display = 'block';
-        document.getElementById('bleStatus').innerText = "接続エラー";
-      }
-    }
 
     // --- UI設定パラメータ ---
     let cycleOrder = ["Right", "TurnOff", "TurnOn", "Up", "Left", "Down"];
     let currentIndex = 0;
     let interval = 2000;
-    let lastChangeTime = 0;
+    let lastChangeTime = Date.now();
 
-    let capture;
     let isPressing = false;
     let lighton = false;
-
     let tiltcurrentangle = 90, pancurrentangle = 90, moveangle = 1;
     let lastSendAt = 0;
     const SEND_INTERVAL_MS = 60; 
     let lastTilt = -999, lastPan = -999;
 
-    function setup() {
-      createCanvas(windowWidth, windowHeight);
-      capture = createCapture({ audio: false, video: { facingMode: "environment" } });
-      capture.hide();
-      textFont('sans-serif');
-      lastChangeTime = millis();
+    // --- キャンバスのセットアップ ---
+    const canvas = document.getElementById('uiCanvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+
+    function resizeCanvas() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
     }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
 
+    // --- 描画ループ (p5.jsのdrawの代わり) ---
     function draw() {
-      background(0);
-
-      // カメラ映像
-      if (capture.loadedmetadata) {
-        let scaleRate = max(width / capture.width, height / capture.height);
-        let dw = capture.width * scaleRate;
-        let dh = capture.height * scaleRate;
-        let dx = (width - dw) / 2;
-        let dy = (height - dh) / 2;
-        image(capture, dx, dy, dw, dh);
-      }
+      ctx.clearRect(0, 0, width, height);
 
       // 照準
-      push(); noFill(); stroke(255, 0, 0); strokeWeight(3);
-      ellipse(width / 2, height / 2 + 50, 120, 120);
-      pop();
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(width / 2, height / 2 + 50, 60, 0, Math.PI * 2);
+      ctx.stroke();
 
       // オートスキャン
-      if (!isPressing && millis() - lastChangeTime >= interval) {
+      let now = Date.now();
+      if (!isPressing && now - lastChangeTime >= interval) {
         currentIndex = (currentIndex + 1) % cycleOrder.length;
-        lastChangeTime = millis();
+        lastChangeTime = now;
       }
       let currentHighlight = cycleOrder[currentIndex];
 
@@ -142,18 +122,26 @@
       // 長押し中の実行
       if (isPressing) executeAction(currentHighlight);
       
-      // テキスト
-      push(); fill(255); textSize(16); textAlign(RIGHT, BOTTOM);
-      text(`Laser: ${lighton ? "ON" : "OFF"}\nTilt: ${tiltcurrentangle}°\nPan: ${pancurrentangle}°`, width - 20, height - 20);
-      pop();
+      // ステータステキスト
+      ctx.fillStyle = 'white';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`Laser: ${lighton ? "ON" : "OFF"}`, width - 20, height - 60);
+      ctx.fillText(`Tilt: ${Math.round(tiltcurrentangle)}°`, width - 20, height - 40);
+      ctx.fillText(`Pan: ${Math.round(pancurrentangle)}°`, width - 20, height - 20);
+
+      requestAnimationFrame(draw);
     }
+    // ループ開始
+    requestAnimationFrame(draw);
 
     function executeAction(action) {
       let changed = false;
-      if (action === "Right") { pancurrentangle = constrain(pancurrentangle - moveangle, 0, 180); changed = true; }
-      else if (action === "Left") { pancurrentangle = constrain(pancurrentangle + moveangle, 0, 180); changed = true; }
-      else if (action === "Up")   { tiltcurrentangle = constrain(tiltcurrentangle + moveangle, 60, 110); changed = true; }
-      else if (action === "Down") { tiltcurrentangle = constrain(tiltcurrentangle - moveangle, 60, 110); changed = true; }
+      if (action === "Right") { pancurrentangle = Math.max(0, Math.min(180, pancurrentangle - moveangle)); changed = true; }
+      else if (action === "Left") { pancurrentangle = Math.max(0, Math.min(180, pancurrentangle + moveangle)); changed = true; }
+      else if (action === "Up")   { tiltcurrentangle = Math.max(60, Math.min(110, tiltcurrentangle + moveangle)); changed = true; }
+      else if (action === "Down") { tiltcurrentangle = Math.max(60, Math.min(110, tiltcurrentangle - moveangle)); changed = true; }
       else if (action === "TurnOn" && !lighton) { lighton = true; sendCommand("light_on"); }
       else if (action === "TurnOff" && lighton) { lighton = false; sendCommand("light_off"); }
 
@@ -161,9 +149,9 @@
     }
 
     function sendServoAngles() {
-      let now = millis();
+      let now = Date.now();
       if (now - lastSendAt >= SEND_INTERVAL_MS) {
-        if (abs(tiltcurrentangle - lastTilt) > 0.001 || abs(pancurrentangle - lastPan) > 0.001) {
+        if (Math.abs(tiltcurrentangle - lastTilt) > 0.001 || Math.abs(pancurrentangle - lastPan) > 0.001) {
           sendCommand(`1:${Math.round(tiltcurrentangle)}`);
           sendCommand(`2:${Math.round(pancurrentangle)}`);
           lastTilt = tiltcurrentangle;
@@ -173,14 +161,12 @@
       }
     }
 
-    async function sendCommand(cmd) {
-      if (!bleCharacteristic) return;
-      try {
-        let encoder = new TextEncoder();
-        await bleCharacteristic.writeValueWithoutResponse(encoder.encode(cmd + '\n'));
-      } catch (err) {
-        console.log("BLE送信エラー", err);
-      }
+    // --- マイコンへのコマンド送信 (Wi-Fi/HTTP) ---
+    function sendCommand(cmd) {
+      let ip = document.getElementById('m5Ip').value;
+      if (!ip) return;
+      fetch(`http://${ip}/action?cmd=${cmd}`, { mode: 'no-cors' })
+        .catch(err => console.log("通信エラー", err));
     }
 
     function drawOverlayGUI(highlight) {
@@ -188,49 +174,83 @@
       drawTopButton(width/2 + 20, btnY, btnW, btnH, "つける", highlight === "TurnOn");
       drawTopButton(width/2 + 180, btnY, btnW, btnH, "けす", highlight === "TurnOff");
 
-      let arrowLong = max(80, min(width, height) * 0.15);
-      let arrowThick = max(10, min(width, height) * 0.02);
+      let arrowLong = Math.max(80, Math.min(width, height) * 0.15);
+      let arrowThick = Math.max(10, Math.min(width, height) * 0.02);
 
       drawArrow(width - 60, height/2, 0, arrowLong, arrowThick, highlight === "Right");
-      drawArrow(60, height/2, PI, arrowLong, arrowThick, highlight === "Left");
-      drawArrow(width/2, 80, -HALF_PI, arrowLong, arrowThick, highlight === "Up");
-      drawArrow(width/2, height - 80, HALF_PI, arrowLong, arrowThick, highlight === "Down");
+      drawArrow(60, height/2, Math.PI, arrowLong, arrowThick, highlight === "Left");
+      drawArrow(width/2, 80, -Math.PI/2, arrowLong, arrowThick, highlight === "Up");
+      drawArrow(width/2, height - 80, Math.PI/2, arrowLong, arrowThick, highlight === "Down");
     }
 
     function drawTopButton(x, y, w, h, label, isHi) {
-      push(); rectMode(CORNER); strokeWeight(2); stroke(255);
-      if (isHi) { fill(255); rect(x, y, w, h, 8); fill(0); } 
-      else { fill(0, 150); rect(x, y, w, h, 8); fill(255); }
-      textAlign(CENTER, CENTER); textSize(18); text(label, x + w/2, y + h/2);
-      pop();
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'white';
+      
+      // 角丸四角形の描画 (対応ブラウザ向け)
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(x, y, w, h, 8);
+      } else {
+        ctx.rect(x, y, w, h); // フォールバック
+      }
+      
+      if (isHi) {
+        ctx.fillStyle = 'white';
+        ctx.fill();
+        ctx.fillStyle = 'black';
+      } else {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fill();
+        ctx.fillStyle = 'white';
+      }
+      ctx.stroke();
+
+      ctx.font = '18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + w/2, y + h/2);
+      ctx.restore();
     }
 
     function drawArrow(cx, cy, rot, W, H, isHi) {
-      let a = isHi ? 255 : 80;
-      push(); translate(cx, cy); rotate(rot); noStroke(); fill(255, a);
-      triangle(W/2, 0, -W/2, -H/2, -W/2, H/2);
-      pop();
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rot);
+      
+      ctx.fillStyle = isHi ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.3)';
+      ctx.beginPath();
+      ctx.moveTo(W/2, 0);
+      ctx.lineTo(-W/2, -H/2);
+      ctx.lineTo(-W/2, H/2);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.restore();
     }
 
-    // ★修正点：画面のタッチ判定
-    function touchStarted() {
-      // 画面上部（ボタンがあるエリア）をタッチした場合は、ブラウザ本来のボタンタップ処理を優先する
-      if (mouseY <= 80) {
-        return; 
-      }
-      // それ以外の画面をタッチした場合は、アクションを実行する
+    // --- タッチ操作イベント ---
+    function handleTouchStart(e) {
+      let touchY = e.touches ? e.touches[0].clientY : e.clientY;
+      // 設定パネルエリアをタッチした場合は無視
+      if (touchY <= 150) return; 
+      
+      e.preventDefault(); // スクロール防止
       isPressing = true;
       executeAction(cycleOrder[currentIndex]);
-      return false; // キャンバスのスクロールなどを防ぐ
     }
     
-    function touchEnded() { 
+    function handleTouchEnd(e) { 
       isPressing = false; 
     }
-    
-    function windowResized() { 
-      resizeCanvas(windowWidth, windowHeight); 
-    }
+
+    // document全体にイベントを紐付け（Canvasはpointer-events: noneにしているため）
+    document.addEventListener('touchstart', handleTouchStart, { passive: false });
+    document.addEventListener('mousedown', handleTouchStart);
+    document.addEventListener('touchend', handleTouchEnd);
+    document.addEventListener('mouseup', handleTouchEnd);
+
   </script>
 </body>
 </html>
