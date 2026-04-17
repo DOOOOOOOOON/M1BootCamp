@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <title>ALS Event iPad Controller (BLE)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <style>
+    body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; }
+    #settings {
+      position: absolute; top: 10px; left: 10px; z-index: 10;
+      background: rgba(0,0,0,0.6); color: white; padding: 10px; border-radius: 8px;
+      font-family: sans-serif; font-size: 14px; display: flex; align-items: center;
+    }
+    button { padding: 8px 16px; border-radius: 4px; border: none; background: #007AFF; color: white; font-size: 16px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="settings">
+    <button id="bleBtn">Bluetoothで接続</button>
+    <span id="bleStatus" style="margin-left:10px;">未接続</span>
+  </div>
+
+  <script>
+    // --- BLE関連 ---
+    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+    let bleCharacteristic = null;
+
+    document.getElementById('bleBtn').addEventListener('click', connectBLE);
+
+    async function connectBLE() {
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'ALS_M5StickC' }],
+          optionalServices: [SERVICE_UUID]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        
+        document.getElementById('bleStatus').innerText = "接続済み！";
+        document.getElementById('bleBtn').style.display = "none";
+        
+        device.addEventListener('gattserverdisconnected', () => {
+          document.getElementById('bleStatus').innerText = "切断されました";
+          document.getElementById('bleBtn').style.display = "inline-block";
+          bleCharacteristic = null;
+        });
+      } catch (error) {
+        console.error(error);
+        document.getElementById('bleStatus').innerText = "接続失敗";
+      }
+    }
+
+    // --- UI設定パラメータ ---
+    let cycleOrder = ["Right", "TurnOff", "TurnOn", "Up", "Left", "Down"];
+    let currentIndex = 0;
+    let interval = 2000;
+    let lastChangeTime = 0;
+
+    let capture;
+    let isPressing = false;
+    let lighton = false;
+
+    let tiltcurrentangle = 90, pancurrentangle = 90, moveangle = 1;
+    let lastSendAt = 0;
+    const SEND_INTERVAL_MS = 60; 
+    let lastTilt = -999, lastPan = -999;
+
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      capture = createCapture({ audio: false, video: { facingMode: "environment" } });
+      capture.hide();
+      textFont('sans-serif');
+      lastChangeTime = millis();
+    }
+
+    function draw() {
+      background(0);
+
+      if (capture.loadedmetadata) {
+        let scaleRate = max(width / capture.width, height / capture.height);
+        let dw = capture.width * scaleRate;
+        let dh = capture.height * scaleRate;
+        let dx = (width - dw) / 2;
+        let dy = (height - dh) / 2;
+        image(capture, dx, dy, dw, dh);
+      }
+
+      push(); noFill(); stroke(255, 0, 0); strokeWeight(3);
+      ellipse(width / 2, height / 2 + 50, 120, 120);
+      pop();
+
+      if (!isPressing && millis() - lastChangeTime >= interval) {
+        currentIndex = (currentIndex + 1) % cycleOrder.length;
+        lastChangeTime = millis();
+      }
+      let currentHighlight = cycleOrder[currentIndex];
+
+      drawOverlayGUI(currentHighlight);
+
+      if (isPressing) executeAction(currentHighlight);
+      
+      push(); fill(255); textSize(16); textAlign(RIGHT, BOTTOM);
+      text(`Laser: ${lighton ? "ON" : "OFF"}\nTilt: ${tiltcurrentangle}°\nPan: ${pancurrentangle}°`, width - 20, height - 20);
+      pop();
+    }
+
+    function executeAction(action) {
+      let changed = false;
+      if (action === "Right") { pancurrentangle = constrain(pancurrentangle - moveangle, 0, 180); changed = true; }
+      else if (action === "Left") { pancurrentangle = constrain(pancurrentangle + moveangle, 0, 180); changed = true; }
+      else if (action === "Up")   { tiltcurrentangle = constrain(tiltcurrentangle + moveangle, 60, 110); changed = true; }
+      else if (action === "Down") { tiltcurrentangle = constrain(tiltcurrentangle - moveangle, 60, 110); changed = true; }
+      else if (action === "TurnOn" && !lighton) { lighton = true; sendCommand("light_on"); }
+      else if (action === "TurnOff" && lighton) { lighton = false; sendCommand("light_off"); }
+
+      if (changed) sendServoAngles();
+    }
+
+    function sendServoAngles() {
+      let now = millis();
+      if (now - lastSendAt >= SEND_INTERVAL_MS) {
+        if (abs(tiltcurrentangle - lastTilt) > 0.001 || abs(pancurrentangle - lastPan) > 0.001) {
+          sendCommand(`1:${Math.round(tiltcurrentangle)}`);
+          sendCommand(`2:${Math.round(pancurrentangle)}`);
+          lastTilt = tiltcurrentangle;
+          lastPan = pancurrentangle;
+          lastSendAt = now;
+        }
+      }
+    }
+
+    async function sendCommand(cmd) {
+      if (!bleCharacteristic) return;
+      try {
+        let encoder = new TextEncoder();
+        // 応答を待たずに高速書き込み
+        await bleCharacteristic.writeValueWithoutResponse(encoder.encode(cmd + '\n'));
+      } catch (err) {
+        console.log("BLE送信エラー", err);
+      }
+    }
+
+    function drawOverlayGUI(highlight) {
+      let btnW = 140, btnH = 50, btnY = 30;
+      drawTopButton(width/2 + 20, btnY, btnW, btnH, "つける", highlight === "TurnOn");
+      drawTopButton(width/2 + 180, btnY, btnW, btnH, "けす", highlight === "TurnOff");
+
+      let arrowLong = max(80, min(width, height) * 0.15);
+      let arrowThick = max(10, min(width, height) * 0.02);
+
+      drawArrow(width - 60, height/2, 0, arrowLong, arrowThick, highlight === "Right");
+      drawArrow(60, height/2, PI, arrowLong, arrowThick, highlight === "Left");
+      drawArrow(width/2, 80, -HALF_PI, arrowLong, arrowThick, highlight === "Up");
+      drawArrow(width/2, height - 80, HALF_PI, arrowLong, arrowThick, highlight === "Down");
+    }
+
+    function drawTopButton(x, y, w, h, label, isHi) {
+      push(); rectMode(CORNER); strokeWeight(2); stroke(255);
+      if (isHi) { fill(255); rect(x, y, w, h, 8); fill(0); } 
+      else { fill(0, 150); rect(x, y, w, h, 8); fill(255); }
+      textAlign(CENTER, CENTER); textSize(18); text(label, x + w/2, y + h/2);
+      pop();
+    }
+
+    function drawArrow(cx, cy, rot, W, H, isHi) {
+      let a = isHi ? 255 : 80;
+      push(); translate(cx, cy); rotate(rot); noStroke(); fill(255, a);
+      triangle(W/2, 0, -W/2, -H/2, -W/2, H/2);
+      pop();
+    }
+
+    function touchStarted() {
+      if (mouseY > 80) {
+        isPressing = true;
+        executeAction(cycleOrder[currentIndex]);
+      }
+      return false;
+    }
+    function touchEnded() { isPressing = false; return false; }
+    function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+  </script>
+</body>
+</html>
