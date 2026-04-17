@@ -8,26 +8,53 @@
   <style>
     body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; }
     #settings {
-      position: absolute; top: 10px; left: 10px; z-index: 10;
-      background: rgba(0,0,0,0.6); color: white; padding: 10px; border-radius: 8px;
-      font-family: sans-serif; font-size: 14px; display: flex; align-items: center;
+      position: absolute; top: 10px; left: 10px; z-index: 999; /* 最前面に配置 */
+      background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
+      font-family: sans-serif; display: flex; align-items: center; gap: 10px;
     }
-    button { padding: 8px 16px; border-radius: 4px; border: none; background: #007AFF; color: white; font-size: 16px; cursor: pointer; }
+    /* iPad用にボタンを大きく、押しやすく調整 */
+    button { 
+      padding: 12px 24px; border-radius: 8px; border: none; 
+      background: #007AFF; color: white; font-size: 18px; font-weight: bold;
+      cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    button:active { background: #005bb5; transform: scale(0.95); }
+    button:disabled { background: #ff4444; cursor: not-allowed; transform: none; }
+    #bleStatus { font-size: 16px; font-weight: bold; }
   </style>
 </head>
 <body>
+  <!-- 設定パネル -->
   <div id="settings">
     <button id="bleBtn">Bluetoothで接続</button>
-    <span id="bleStatus" style="margin-left:10px;">未接続</span>
+    <span id="bleStatus">未接続</span>
+  </div>
+
+  <!-- カスタムメッセージボックス（alertの代わり） -->
+  <div id="msgBox" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(220,50,50,0.9); color:white; padding:20px; border-radius:10px; z-index:1000; text-align:center; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+    <p id="msgText" style="margin-bottom: 15px; font-size: 16px; white-space: pre-wrap; line-height: 1.5;"></p>
+    <button onclick="document.getElementById('msgBox').style.display='none'" style="background:#333; font-size: 16px;">閉じる</button>
   </div>
 
   <script>
+    // --- ブラウザのBluetooth対応チェック ---
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById('bleBtn');
+      if (!navigator.bluetooth) {
+        // Safariなど非対応ブラウザの場合、ボタンを赤くして警告
+        btn.innerText = "⚠️ Safari非対応 (Bluefyを使ってください)";
+        btn.disabled = true; 
+        document.getElementById('bleStatus').innerText = "通信不可";
+      } else {
+        // 対応している場合のみイベント登録
+        btn.addEventListener('click', connectBLE);
+      }
+    });
+
     // --- BLE関連 ---
     const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
     const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
     let bleCharacteristic = null;
-
-    document.getElementById('bleBtn').addEventListener('click', connectBLE);
 
     async function connectBLE() {
       try {
@@ -39,17 +66,26 @@
         const service = await server.getPrimaryService(SERVICE_UUID);
         bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
         
-        document.getElementById('bleStatus').innerText = "接続済み！";
-        document.getElementById('bleBtn').style.display = "none";
+        document.getElementById('bleStatus').innerText = "✅ 接続済み！";
+        document.getElementById('bleStatus').style.color = "#4CAF50";
+        document.getElementById('bleBtn').style.display = "none"; // 接続後はボタンを隠す
         
         device.addEventListener('gattserverdisconnected', () => {
-          document.getElementById('bleStatus').innerText = "切断されました";
-          document.getElementById('bleBtn').style.display = "inline-block";
+          document.getElementById('bleStatus').innerText = "❌ 切断されました";
+          document.getElementById('bleStatus').style.color = "#ff4444";
+          document.getElementById('bleBtn').style.display = "block";
           bleCharacteristic = null;
         });
       } catch (error) {
         console.error(error);
-        document.getElementById('bleStatus').innerText = "接続失敗";
+        let errorMsg = "接続がキャンセルされたか、失敗しました。";
+        // プレビュー環境などでの権限エラーを検知
+        if (error.name === 'SecurityError') {
+           errorMsg = "セキュリティ設定によりBluetoothがブロックされました。\nこのプレビュー画面の中ではBluetoothを使用できません。\n\n右上のボタンから別タブで開くか、iPadのBluefyブラウザにURLをコピーして使用してください。";
+        }
+        document.getElementById('msgText').innerText = errorMsg;
+        document.getElementById('msgBox').style.display = 'block';
+        document.getElementById('bleStatus').innerText = "接続エラー";
       }
     }
 
@@ -79,6 +115,7 @@
     function draw() {
       background(0);
 
+      // カメラ映像
       if (capture.loadedmetadata) {
         let scaleRate = max(width / capture.width, height / capture.height);
         let dw = capture.width * scaleRate;
@@ -88,10 +125,12 @@
         image(capture, dx, dy, dw, dh);
       }
 
+      // 照準
       push(); noFill(); stroke(255, 0, 0); strokeWeight(3);
       ellipse(width / 2, height / 2 + 50, 120, 120);
       pop();
 
+      // オートスキャン
       if (!isPressing && millis() - lastChangeTime >= interval) {
         currentIndex = (currentIndex + 1) % cycleOrder.length;
         lastChangeTime = millis();
@@ -100,8 +139,10 @@
 
       drawOverlayGUI(currentHighlight);
 
+      // 長押し中の実行
       if (isPressing) executeAction(currentHighlight);
       
+      // テキスト
       push(); fill(255); textSize(16); textAlign(RIGHT, BOTTOM);
       text(`Laser: ${lighton ? "ON" : "OFF"}\nTilt: ${tiltcurrentangle}°\nPan: ${pancurrentangle}°`, width - 20, height - 20);
       pop();
@@ -136,7 +177,6 @@
       if (!bleCharacteristic) return;
       try {
         let encoder = new TextEncoder();
-        // 応答を待たずに高速書き込み
         await bleCharacteristic.writeValueWithoutResponse(encoder.encode(cmd + '\n'));
       } catch (err) {
         console.log("BLE送信エラー", err);
@@ -172,15 +212,25 @@
       pop();
     }
 
+    // ★修正点：画面のタッチ判定
     function touchStarted() {
-      if (mouseY > 80) {
-        isPressing = true;
-        executeAction(cycleOrder[currentIndex]);
+      // 画面上部（ボタンがあるエリア）をタッチした場合は、ブラウザ本来のボタンタップ処理を優先する
+      if (mouseY <= 80) {
+        return; 
       }
-      return false;
+      // それ以外の画面をタッチした場合は、アクションを実行する
+      isPressing = true;
+      executeAction(cycleOrder[currentIndex]);
+      return false; // キャンバスのスクロールなどを防ぐ
     }
-    function touchEnded() { isPressing = false; return false; }
-    function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+    
+    function touchEnded() { 
+      isPressing = false; 
+    }
+    
+    function windowResized() { 
+      resizeCanvas(windowWidth, windowHeight); 
+    }
   </script>
 </body>
 </html>
