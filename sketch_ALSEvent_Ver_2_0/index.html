@@ -48,13 +48,9 @@
   <!-- 設定パネル -->
   <div id="settings">
     <div class="row">
-      <span>マイコンIP(操作):</span>
+      <span>M5StickC IP:</span>
       <input type="text" id="m5Ip" value="192.168.4.1">
-    </div>
-    <div class="row">
-      <span>カメラIP(映像):</span>
-      <input type="text" id="camIp" value="192.168.4.2">
-      <button id="camBtn">映像を更新</button>
+      <button id="camBtn">接続＆映像更新</button>
     </div>
   </div>
 
@@ -64,10 +60,10 @@
   <script>
     // --- 映像の表示処理 ---
     document.getElementById('camBtn').addEventListener('click', () => {
-      const ip = document.getElementById('camIp').value;
+      const ip = document.getElementById('m5Ip').value;
       if (!ip) return;
       const bgImg = document.getElementById('bgCamera');
-      // M5CameraやESP32-CAMの標準的な映像配信ポート（:81/stream）
+      // M5StickCから配信される映像のポート（標準的なESP32カメラライブラリの:81/streamを想定）
       bgImg.src = `http://${ip}:81/stream`;
     });
 
