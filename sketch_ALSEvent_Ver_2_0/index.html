@@ -212,24 +212,20 @@
       if (changed) sendServoAngles();
     }
 
-// ★修正：角度が変わったモーター「だけ」を確実に送信するように変更
-    async function sendServoAngles() {
+// ★改良：上下と左右の角度を「1つの文字」にまとめて同時に送る
+    function sendServoAngles() {
       let now = millis();
       if (now - lastSendAt >= SEND_INTERVAL_MS) {
-        
-        // 上下（Tilt）が変わっていたら送信
-        if (abs(tiltcurrentangle - lastTilt) > 0.001) {
-          await sendCommand(`1:${Math.round(tiltcurrentangle)}`);
+        // どちらか片方でも角度が変わっていたら
+        if (abs(tiltcurrentangle - lastTilt) > 0.001 || abs(pancurrentangle - lastPan) > 0.001) {
+          
+          // "上下の角度,左右の角度" という1つの文章を作って1回だけ送信する
+          sendCommand(`${Math.round(tiltcurrentangle)},${Math.round(pancurrentangle)}`);
+          
           lastTilt = tiltcurrentangle;
-        }
-        
-        // 左右（Pan）が変わっていたら送信
-        if (abs(pancurrentangle - lastPan) > 0.001) {
-          await sendCommand(`2:${Math.round(pancurrentangle)}`);
           lastPan = pancurrentangle;
+          lastSendAt = now;
         }
-        
-        lastSendAt = now;
       }
     }
 
