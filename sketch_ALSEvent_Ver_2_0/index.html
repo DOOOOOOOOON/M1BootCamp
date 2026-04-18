@@ -146,7 +146,7 @@
       drawOverlayGUI(currentHighlight);
 
       if (isPressing) executeAction(currentHighlight);
-      
+        
       push(); fill(255); textSize(16); textAlign(RIGHT, BOTTOM);
       text(`Laser: ${lighton ? "ON" : "OFF"}\nTilt: ${tiltcurrentangle}°\nPan: ${pancurrentangle}°`, width - 20, height - 20);
       pop();
@@ -168,7 +168,6 @@
       let now = millis();
       if (now - lastSendAt >= SEND_INTERVAL_MS) {
         if (abs(tiltcurrentangle - lastTilt) > 0.001 || abs(pancurrentangle - lastPan) > 0.001) {
-          // ★元の「1:角度」と「2:角度」を別々に送る処理に完全に戻しました
           sendCommand(`1:${Math.round(tiltcurrentangle)}`);
           sendCommand(`2:${Math.round(pancurrentangle)}`);
           lastTilt = tiltcurrentangle;
@@ -178,13 +177,30 @@
       }
     }
 
-    async function sendCommand(cmd) {
-      if (!bleCharacteristic) return;
+    // 🌟 修正箇所: BLEの送信キュー（これがないとGATTエラーで片方のサーボ信号が消えます）
+    let cmdQueue = [];
+    let isBleSending = false;
+
+    async function processBleQueue() {
+      if (isBleSending || cmdQueue.length === 0 || !bleCharacteristic) return;
+      isBleSending = true;
       try {
+        let cmd = cmdQueue.shift();
         let encoder = new TextEncoder();
         await bleCharacteristic.writeValueWithoutResponse(encoder.encode(cmd + '\n'));
-      } catch (err) { console.log(err); }
+      } catch (err) { 
+        console.error("BLE Send Error:", err); 
+      } finally {
+        isBleSending = false;
+        processBleQueue(); // キューにまだコマンドがあれば次を送信
+      }
     }
+
+    function sendCommand(cmd) {
+      cmdQueue.push(cmd);
+      processBleQueue();
+    }
+    // 🌟 修正ここまで
 
     function drawOverlayGUI(highlight) {
       drawTopButton(width/2 + 20, 30, 140, 50, "つける", highlight === "TurnOn");
