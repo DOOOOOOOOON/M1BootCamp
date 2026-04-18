@@ -3,113 +3,189 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>ALS Event iPad Controller (Wi-Fi AP Offline)</title>
+  <title>ALS Event iPad Controller (BLE & USB Cam)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
   <style>
-    body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; font-family: sans-serif; }
-    
-    /* カメラの映像を背景に全画面表示 */
-    #bgCamera {
-      position: absolute; top: 0; left: 0;
-      width: 100vw; height: 100vh;
-      object-fit: contain; 
-      z-index: -1;         
-      background-color: #111;
-    }
-
+    body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; }
     #settings {
       position: absolute; top: 10px; left: 10px; z-index: 999;
       background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
-      display: flex; flex-direction: column; gap: 15px;
+      font-family: sans-serif; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     }
-    .row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
-
-    button { 
-      padding: 8px 16px; border-radius: 8px; border: none; 
-      background: #007AFF; color: white; font-size: 14px; font-weight: bold;
-      cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    button, select { 
+      padding: 12px 20px; border-radius: 8px; border: none; 
+      font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
+    button { background: #007AFF; color: white; }
     button:active { background: #005bb5; transform: scale(0.95); }
-    
-    input[type="text"] {
-      padding: 6px; font-size: 14px; border-radius: 4px; border: 1px solid #ccc; width: 110px;
-    }
-
-    /* 描画用キャンバス */
-    #uiCanvas {
-      position: absolute; top: 0; left: 0; z-index: 1; pointer-events: none;
-    }
+    button:disabled { background: #ff4444; cursor: not-allowed; transform: none; }
+    select { background: #333; color: white; border: 1px solid #555; }
+    #bleStatus { font-size: 16px; font-weight: bold; }
   </style>
 </head>
 <body>
-
-  <!-- カメラの映像を表示するタグ -->
-  <img id="bgCamera" alt="ここにカメラの映像が映ります">
-
-  <!-- 設定パネル -->
   <div id="settings">
-    <div class="row">
-      <span>M5StickC IP:</span>
-      <input type="text" id="m5Ip" value="192.168.4.1">
-      <button id="camBtn">接続＆映像更新</button>
-    </div>
+    <button id="bleBtn">Bluetoothで接続</button>
+    <span id="bleStatus">未接続</span>
+    <select id="cameraSelect"><option>カメラを探しています...</option></select>
   </div>
 
-  <!-- UI描画用キャンバス -->
-  <canvas id="uiCanvas"></canvas>
+  <div id="msgBox" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(220,50,50,0.9); color:white; padding:20px; border-radius:10px; z-index:1000; text-align:center; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+    <p id="msgText" style="margin-bottom: 15px; font-size: 16px; white-space: pre-wrap; line-height: 1.5;"></p>
+    <button onclick="document.getElementById('msgBox').style.display='none'" style="background:#333; font-size: 16px;">閉じる</button>
+  </div>
 
   <script>
-    // --- 映像の表示処理 ---
-    document.getElementById('camBtn').addEventListener('click', () => {
-      const ip = document.getElementById('m5Ip').value;
-      if (!ip) return;
-      const bgImg = document.getElementById('bgCamera');
-      // M5StickCから配信される映像のポート（標準的なESP32カメラライブラリの:81/streamを想定）
-      bgImg.src = `http://${ip}:81/stream`;
+    // --- ブラウザのBluetooth対応チェック ---
+    document.addEventListener("DOMContentLoaded", () => {
+      const btn = document.getElementById('bleBtn');
+      if (!navigator.bluetooth) {
+        btn.innerText = "⚠️ Safari非対応 (Bluefyを使ってください)";
+        btn.disabled = true; 
+        document.getElementById('bleStatus').innerText = "通信不可";
+      } else {
+        btn.addEventListener('click', connectBLE);
+      }
     });
+
+    // --- BLE関連 ---
+    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+    let bleCharacteristic = null;
+
+    async function connectBLE() {
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'ALS_M5StickC' }],
+          optionalServices: [SERVICE_UUID]
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        
+        document.getElementById('bleStatus').innerText = "✅ 接続済み！";
+        document.getElementById('bleStatus').style.color = "#4CAF50";
+        document.getElementById('bleBtn').style.display = "none"; 
+        
+        device.addEventListener('gattserverdisconnected', () => {
+          document.getElementById('bleStatus').innerText = "❌ 切断されました";
+          document.getElementById('bleStatus').style.color = "#ff4444";
+          document.getElementById('bleBtn').style.display = "block";
+          bleCharacteristic = null;
+        });
+      } catch (error) {
+        console.error(error);
+        let errorMsg = "接続がキャンセルされたか、失敗しました。";
+        if (error.name === 'SecurityError') {
+           errorMsg = "セキュリティ設定によりBluetoothがブロックされました。\n別タブで開くか、Bluefyブラウザを使用してください。";
+        }
+        document.getElementById('msgText').innerText = errorMsg;
+        document.getElementById('msgBox').style.display = 'block';
+        document.getElementById('bleStatus').innerText = "接続エラー";
+      }
+    }
 
     // --- UI設定パラメータ ---
     let cycleOrder = ["Right", "TurnOff", "TurnOn", "Up", "Left", "Down"];
     let currentIndex = 0;
     let interval = 2000;
-    let lastChangeTime = Date.now();
+    let lastChangeTime = 0;
 
+    let capture = null; // ★初期値はnullに
     let isPressing = false;
     let lighton = false;
+
     let tiltcurrentangle = 90, pancurrentangle = 90, moveangle = 1;
     let lastSendAt = 0;
     const SEND_INTERVAL_MS = 60; 
     let lastTilt = -999, lastPan = -999;
 
-    // --- キャンバスのセットアップ ---
-    const canvas = document.getElementById('uiCanvas');
-    const ctx = canvas.getContext('2d');
-    let width, height;
+    // ★追加：カメラデバイスの取得と設定
+    async function initCameras() {
+      const select = document.getElementById('cameraSelect');
+      try {
+        // まずダミーでカメラ権限を要求（権限がないとデバイス名が取得できないため）
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(track => track.stop());
 
-    function resizeCanvas() {
-      width = window.innerWidth;
-      height = window.innerHeight;
-      canvas.width = width;
-      canvas.height = height;
+        // デバイス一覧を取得
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        
+        select.innerHTML = ''; // ロード文字を消去
+
+        if (videoDevices.length === 0) {
+          select.innerHTML = '<option>カメラが見つかりません</option>';
+          return;
+        }
+
+        // セレクトボックスにカメラを追加
+        videoDevices.forEach((device, index) => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          // USBカメラなどはここに名前が入ります
+          option.text = device.label || `カメラ ${index + 1}`;
+          select.appendChild(option);
+        });
+
+        // 最初のカメラを起動
+        startCamera(videoDevices[0].deviceId);
+
+        // ドロップダウンが変更されたらカメラを切り替える
+        select.addEventListener('change', (e) => {
+          startCamera(e.target.value);
+        });
+
+      } catch (err) {
+        console.error("カメラの取得に失敗しました", err);
+        select.innerHTML = '<option>カメラへのアクセスが拒否されました</option>';
+      }
     }
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
 
-    // --- 描画ループ (p5.jsのdrawの代わり) ---
+    // ★追加：指定したIDのカメラを起動する処理
+    function startCamera(deviceId) {
+      if (capture) {
+        capture.remove(); // 古いカメラ映像を削除
+      }
+      let constraints = {
+        audio: false,
+        video: { deviceId: { exact: deviceId } }
+      };
+      capture = createCapture(constraints);
+      capture.hide(); // p5.jsの標準DOM要素は隠してdrawで描画する
+    }
+
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      textFont('sans-serif');
+      lastChangeTime = millis();
+      
+      // ★起動時にカメラ一覧を取得開始
+      initCameras();
+    }
+
     function draw() {
-      ctx.clearRect(0, 0, width, height);
+      background(0);
+
+      // ★変更：captureが存在し、メタデータがロードされている時だけ描画
+      if (capture && capture.loadedmetadata) {
+        let scaleRate = max(width / capture.width, height / capture.height);
+        let dw = capture.width * scaleRate;
+        let dh = capture.height * scaleRate;
+        let dx = (width - dw) / 2;
+        let dy = (height - dh) / 2;
+        image(capture, dx, dy, dw, dh);
+      }
 
       // 照準
-      ctx.strokeStyle = 'red';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(width / 2, height / 2 + 50, 60, 0, Math.PI * 2);
-      ctx.stroke();
+      push(); noFill(); stroke(255, 0, 0); strokeWeight(3);
+      ellipse(width / 2, height / 2 + 50, 120, 120);
+      pop();
 
       // オートスキャン
-      let now = Date.now();
-      if (!isPressing && now - lastChangeTime >= interval) {
+      if (!isPressing && millis() - lastChangeTime >= interval) {
         currentIndex = (currentIndex + 1) % cycleOrder.length;
-        lastChangeTime = now;
+        lastChangeTime = millis();
       }
       let currentHighlight = cycleOrder[currentIndex];
 
@@ -118,26 +194,18 @@
       // 長押し中の実行
       if (isPressing) executeAction(currentHighlight);
       
-      // ステータステキスト
-      ctx.fillStyle = 'white';
-      ctx.font = '16px sans-serif';
-      ctx.textAlign = 'right';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(`Laser: ${lighton ? "ON" : "OFF"}`, width - 20, height - 60);
-      ctx.fillText(`Tilt: ${Math.round(tiltcurrentangle)}°`, width - 20, height - 40);
-      ctx.fillText(`Pan: ${Math.round(pancurrentangle)}°`, width - 20, height - 20);
-
-      requestAnimationFrame(draw);
+      // テキスト
+      push(); fill(255); textSize(16); textAlign(RIGHT, BOTTOM);
+      text(`Laser: ${lighton ? "ON" : "OFF"}\nTilt: ${tiltcurrentangle}°\nPan: ${pancurrentangle}°`, width - 20, height - 20);
+      pop();
     }
-    // ループ開始
-    requestAnimationFrame(draw);
 
     function executeAction(action) {
       let changed = false;
-      if (action === "Right") { pancurrentangle = Math.max(0, Math.min(180, pancurrentangle - moveangle)); changed = true; }
-      else if (action === "Left") { pancurrentangle = Math.max(0, Math.min(180, pancurrentangle + moveangle)); changed = true; }
-      else if (action === "Up")   { tiltcurrentangle = Math.max(60, Math.min(110, tiltcurrentangle + moveangle)); changed = true; }
-      else if (action === "Down") { tiltcurrentangle = Math.max(60, Math.min(110, tiltcurrentangle - moveangle)); changed = true; }
+      if (action === "Right") { pancurrentangle = constrain(pancurrentangle - moveangle, 0, 180); changed = true; }
+      else if (action === "Left") { pancurrentangle = constrain(pancurrentangle + moveangle, 0, 180); changed = true; }
+      else if (action === "Up")   { tiltcurrentangle = constrain(tiltcurrentangle + moveangle, 60, 110); changed = true; }
+      else if (action === "Down") { tiltcurrentangle = constrain(tiltcurrentangle - moveangle, 60, 110); changed = true; }
       else if (action === "TurnOn" && !lighton) { lighton = true; sendCommand("light_on"); }
       else if (action === "TurnOff" && lighton) { lighton = false; sendCommand("light_off"); }
 
@@ -145,9 +213,9 @@
     }
 
     function sendServoAngles() {
-      let now = Date.now();
+      let now = millis();
       if (now - lastSendAt >= SEND_INTERVAL_MS) {
-        if (Math.abs(tiltcurrentangle - lastTilt) > 0.001 || Math.abs(pancurrentangle - lastPan) > 0.001) {
+        if (abs(tiltcurrentangle - lastTilt) > 0.001 || abs(pancurrentangle - lastPan) > 0.001) {
           sendCommand(`1:${Math.round(tiltcurrentangle)}`);
           sendCommand(`2:${Math.round(pancurrentangle)}`);
           lastTilt = tiltcurrentangle;
@@ -157,12 +225,14 @@
       }
     }
 
-    // --- マイコンへのコマンド送信 (Wi-Fi/HTTP) ---
-    function sendCommand(cmd) {
-      let ip = document.getElementById('m5Ip').value;
-      if (!ip) return;
-      fetch(`http://${ip}/action?cmd=${cmd}`, { mode: 'no-cors' })
-        .catch(err => console.log("通信エラー", err));
+    async function sendCommand(cmd) {
+      if (!bleCharacteristic) return;
+      try {
+        let encoder = new TextEncoder();
+        await bleCharacteristic.writeValueWithoutResponse(encoder.encode(cmd + '\n'));
+      } catch (err) {
+        console.log("BLE送信エラー", err);
+      }
     }
 
     function drawOverlayGUI(highlight) {
@@ -170,83 +240,47 @@
       drawTopButton(width/2 + 20, btnY, btnW, btnH, "つける", highlight === "TurnOn");
       drawTopButton(width/2 + 180, btnY, btnW, btnH, "けす", highlight === "TurnOff");
 
-      let arrowLong = Math.max(80, Math.min(width, height) * 0.15);
-      let arrowThick = Math.max(10, Math.min(width, height) * 0.02);
+      let arrowLong = max(80, min(width, height) * 0.15);
+      let arrowThick = max(10, min(width, height) * 0.02);
 
       drawArrow(width - 60, height/2, 0, arrowLong, arrowThick, highlight === "Right");
-      drawArrow(60, height/2, Math.PI, arrowLong, arrowThick, highlight === "Left");
-      drawArrow(width/2, 80, -Math.PI/2, arrowLong, arrowThick, highlight === "Up");
-      drawArrow(width/2, height - 80, Math.PI/2, arrowLong, arrowThick, highlight === "Down");
+      drawArrow(60, height/2, PI, arrowLong, arrowThick, highlight === "Left");
+      drawArrow(width/2, 80, -HALF_PI, arrowLong, arrowThick, highlight === "Up");
+      drawArrow(width/2, height - 80, HALF_PI, arrowLong, arrowThick, highlight === "Down");
     }
 
     function drawTopButton(x, y, w, h, label, isHi) {
-      ctx.save();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'white';
-      
-      // 角丸四角形の描画 (対応ブラウザ向け)
-      ctx.beginPath();
-      if (ctx.roundRect) {
-        ctx.roundRect(x, y, w, h, 8);
-      } else {
-        ctx.rect(x, y, w, h); // フォールバック
-      }
-      
-      if (isHi) {
-        ctx.fillStyle = 'white';
-        ctx.fill();
-        ctx.fillStyle = 'black';
-      } else {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.fill();
-        ctx.fillStyle = 'white';
-      }
-      ctx.stroke();
-
-      ctx.font = '18px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, x + w/2, y + h/2);
-      ctx.restore();
+      push(); rectMode(CORNER); strokeWeight(2); stroke(255);
+      if (isHi) { fill(255); rect(x, y, w, h, 8); fill(0); } 
+      else { fill(0, 150); rect(x, y, w, h, 8); fill(255); }
+      textAlign(CENTER, CENTER); textSize(18); text(label, x + w/2, y + h/2);
+      pop();
     }
 
     function drawArrow(cx, cy, rot, W, H, isHi) {
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(rot);
-      
-      ctx.fillStyle = isHi ? 'rgba(255, 255, 255, 1)' : 'rgba(255, 255, 255, 0.3)';
-      ctx.beginPath();
-      ctx.moveTo(W/2, 0);
-      ctx.lineTo(-W/2, -H/2);
-      ctx.lineTo(-W/2, H/2);
-      ctx.closePath();
-      ctx.fill();
-      
-      ctx.restore();
+      let a = isHi ? 255 : 80;
+      push(); translate(cx, cy); rotate(rot); noStroke(); fill(255, a);
+      triangle(W/2, 0, -W/2, -H/2, -W/2, H/2);
+      pop();
     }
 
-    // --- タッチ操作イベント ---
-    function handleTouchStart(e) {
-      let touchY = e.touches ? e.touches[0].clientY : e.clientY;
-      // 設定パネルエリアをタッチした場合は無視
-      if (touchY <= 150) return; 
-      
-      e.preventDefault(); // スクロール防止
+    function touchStarted() {
+      // ドロップダウンやボタンがある上部エリア（100px）のタッチは、操作として判定しない
+      if (mouseY <= 100) {
+        return; 
+      }
       isPressing = true;
       executeAction(cycleOrder[currentIndex]);
+      return false;
     }
     
-    function handleTouchEnd(e) { 
+    function touchEnded() { 
       isPressing = false; 
     }
-
-    // document全体にイベントを紐付け（Canvasはpointer-events: noneにしているため）
-    document.addEventListener('touchstart', handleTouchStart, { passive: false });
-    document.addEventListener('mousedown', handleTouchStart);
-    document.addEventListener('touchend', handleTouchEnd);
-    document.addEventListener('mouseup', handleTouchEnd);
-
+    
+    function windowResized() { 
+      resizeCanvas(windowWidth, windowHeight); 
+    }
   </script>
 </body>
 </html>
