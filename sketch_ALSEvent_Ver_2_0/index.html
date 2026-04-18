@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>ALS Controller (Stable BLE)</title>
+  <title>ALS Controller (Original BLE & USB Cam)</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
   <style>
     body { padding: 0; margin: 0; overflow: hidden; background-color: #000; touch-action: none; }
@@ -21,6 +21,11 @@
     <button id="bleBtn">Bluetoothで接続</button>
     <span id="bleStatus">未接続</span>
     <select id="cameraSelect"><option>カメラを探しています...</option></select>
+  </div>
+
+  <div id="msgBox" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(220,50,50,0.9); color:white; padding:20px; border-radius:10px; z-index:1000; text-align:center; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+    <p id="msgText" style="margin-bottom: 15px; font-size: 16px; white-space: pre-wrap; line-height: 1.5;"></p>
+    <button onclick="document.getElementById('msgBox').style.display='none'" style="background:#333; font-size: 16px;">閉じる</button>
   </div>
 
   <script>
@@ -56,7 +61,16 @@
           document.getElementById('bleBtn').style.display = "block";
           bleCharacteristic = null;
         });
-      } catch (error) { console.error(error); }
+      } catch (error) { 
+        console.error(error); 
+        let errorMsg = "接続がキャンセルされたか、失敗しました。";
+        if (error.name === 'SecurityError') {
+           errorMsg = "セキュリティ設定によりBluetoothがブロックされました。\n別タブで開くか、Bluefyブラウザを使用してください。";
+        }
+        document.getElementById('msgText').innerText = errorMsg;
+        document.getElementById('msgBox').style.display = 'block';
+        document.getElementById('bleStatus').innerText = "接続エラー";
+      }
     }
 
     let cycleOrder = ["Right", "TurnOff", "TurnOn", "Up", "Left", "Down"];
@@ -70,7 +84,6 @@
 
     let tiltcurrentangle = 90, pancurrentangle = 90, moveangle = 1;
     let lastSendAt = 0;
-    // ★パンク防止のため100ms(1秒間に10回)に制限
     const SEND_INTERVAL_MS = 100; 
     let lastTilt = -999, lastPan = -999;
 
@@ -155,8 +168,9 @@
       let now = millis();
       if (now - lastSendAt >= SEND_INTERVAL_MS) {
         if (abs(tiltcurrentangle - lastTilt) > 0.001 || abs(pancurrentangle - lastPan) > 0.001) {
-          // ★ここで「上下,左右」の形式で1回で送る
-          sendCommand(`${Math.round(tiltcurrentangle)},${Math.round(pancurrentangle)}`);
+          // ★元の「1:角度」と「2:角度」を別々に送る処理に完全に戻しました
+          sendCommand(`1:${Math.round(tiltcurrentangle)}`);
+          sendCommand(`2:${Math.round(pancurrentangle)}`);
           lastTilt = tiltcurrentangle;
           lastPan = pancurrentangle;
           lastSendAt = now;
@@ -210,7 +224,5 @@
     function touchEnded() { isPressing = false; }
     function windowResized() { resizeCanvas(windowWidth, windowHeight); }
   </script>
-</body>
-</html>
 </body>
 </html>
